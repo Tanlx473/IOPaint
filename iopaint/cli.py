@@ -29,8 +29,12 @@ typer_app = typer.Typer(pretty_exceptions_show_locals=False, add_completion=Fals
 
 @typer_app.command(help="Install all plugins dependencies")
 def install_plugins_packages():
+    """Install third party packages required by any installed plugins."""
+
+    # Import here so the dependency is only loaded when the command runs
     from iopaint.installer import install_plugins_package
 
+    # Trigger the installation routine provided by the installer module
     install_plugins_package()
 
 
@@ -46,8 +50,12 @@ def download(
         callback=setup_model_dir,
     ),
 ):
+    """Download a Stable Diffusion or SDXL model from HuggingFace."""
+
+    # Defer heavy import until the command is executed
     from iopaint.download import cli_download_model
 
+    # Perform the actual model download
     cli_download_model(model)
 
 
@@ -60,6 +68,9 @@ def list_model(
         callback=setup_model_dir,
     ),
 ):
+    """Print the names of all models that have already been downloaded."""
+
+    # Import lazily to avoid unnecessary overhead when the command isn't used
     from iopaint.download import scan_models
 
     scanned_models = scan_models()
@@ -93,6 +104,9 @@ def run(
         callback=setup_model_dir,
     ),
 ):
+    """Run inpainting on a batch of images using the selected model."""
+
+    # Check if the required model exists and download it if missing
     from iopaint.download import cli_download_model, scan_models
 
     scanned_models = scan_models()
@@ -100,8 +114,10 @@ def run(
         logger.info(f"{model} not found in {model_dir}, try to downloading")
         cli_download_model(model)
 
+    # Import the heavy batch processing logic lazily
     from iopaint.batch_processing import batch_inpaint
 
+    # Run the batch job with the provided parameters
     batch_inpaint(model, device, image, mask, output, config, concat)
 
 
@@ -155,12 +171,17 @@ def start(
     enable_restoreformer: bool = Option(False),
     restoreformer_device: Device = Option(Device.cpu),
 ):
+    """Launch the web server with the specified configuration options."""
+
     dump_environment_info()
+
+    # Validate and normalize all device options
     device = check_device(device)
     remove_bg_device = check_device(remove_bg_device)
     realesrgan_device = check_device(realesrgan_device)
     gfpgan_device = check_device(gfpgan_device)
 
+    # Sanity checks on input arguments to avoid later errors
     if input and not input.exists():
         logger.error(f"invalid --input: {input} not exists")
         exit(-1)
@@ -245,7 +266,11 @@ def start(
 def start_web_config(
     config_file: Path = Option("config.json"),
 ):
+    """Open the interactive configuration page in a web browser."""
+
     dump_environment_info()
+
+    # Import here to keep the startup fast when this command isn't used
     from iopaint.web_config import main
 
     main(config_file)
