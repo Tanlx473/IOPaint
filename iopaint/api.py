@@ -22,12 +22,14 @@ import socketio
 import torch
 
 try:
+    # 禁用 PyTorch 一些可能带来额外开销的 JIT 与 Fuser 功能
     torch._C._jit_override_can_fuse_on_cpu(False)
     torch._C._jit_override_can_fuse_on_gpu(False)
     torch._C._jit_set_texpr_fuser_enabled(False)
     torch._C._jit_set_nvfuser_enabled(False)
     torch._C._jit_set_profiling_mode(False)
-except:
+except:  # noqa: E722 - 保持与原库兼容
+    # 某些环境可能不存在上述接口，忽略异常即可
     pass
 
 import uvicorn
@@ -78,28 +80,38 @@ WEB_APP_DIR = CURRENT_DIR / "web_app"
 
 
 def api_middleware(app: FastAPI):
+    """为 FastAPI 应用添加通用中间件和异常处理。"""
+
+    # 控制是否启用 rich 格式的异常输出
     rich_available = False
     try:
+        # 若设置 WEBUI_RICH_EXCEPTIONS 环境变量，则启用 rich 格式化输出
         if os.environ.get("WEBUI_RICH_EXCEPTIONS", None) is not None:
-            import anyio  # importing just so it can be placed on silent list
-            import starlette  # importing just so it can be placed on silent list
+            import anyio  # 放入 suppress 列表，避免打印不必要的栈信息
+            import starlette  # 同上，仅用于异常抑制
             from rich.console import Console
 
+            # 创建 rich 控制台用于美化异常输出
             console = Console()
             rich_available = True
     except Exception:
+        # rich 未安装或导入失败时，直接忽略，继续使用默认日志
         pass
 
     def handle_exception(request: Request, e: Exception):
+        """统一处理接口异常，生成格式化的 JSON 响应"""
+
         err = {
             "error": type(e).__name__,
             "detail": vars(e).get("detail", ""),
             "body": vars(e).get("body", ""),
             "errors": str(e),
         }
+        # HTTPException 为已知错误，避免重复打印回溯
         if not isinstance(
             e, HTTPException
-        ):  # do not print backtrace on known httpexceptions
+        ):
+            # 打印错误基本信息并根据是否支持 rich 决定输出方式
             message = f"API error: {request.method}: {request.url} {err}"
             if rich_available:
                 print(message)
@@ -114,11 +126,14 @@ def api_middleware(app: FastAPI):
             else:
                 traceback.print_exc()
         return JSONResponse(
-            status_code=vars(e).get("status_code", 500), content=jsonable_encoder(err)
+            # 使用异常自带的状态码，默认 500
+            status_code=vars(e).get("status_code", 500),
+            content=jsonable_encoder(err),
         )
 
     @app.middleware("http")
     async def exception_handling(request: Request, call_next):
+        """拦截请求，在出现异常时返回统一格式。"""
         try:
             return await call_next(request)
         except Exception as e:
@@ -126,12 +141,15 @@ def api_middleware(app: FastAPI):
 
     @app.exception_handler(Exception)
     async def fastapi_exception_handler(request: Request, e: Exception):
+        """全局异常处理器。"""
         return handle_exception(request, e)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, e: HTTPException):
+        """处理 FastAPI 内置的 HTTP 异常。"""
         return handle_exception(request, e)
 
+    # 允许跨域访问，方便前端独立部署
     cors_options = {
         "allow_methods": ["*"],
         "allow_headers": ["*"],
@@ -142,15 +160,14 @@ def api_middleware(app: FastAPI):
     app.add_middleware(CORSMiddleware, **cors_options)
 
 
+# 用于在回调中发送 SocketIO 事件的全局变量
 global_sio: AsyncServer = None
 
 
 def diffuser_callback(pipe, step: int, timestep: int, callback_kwargs: Dict = {}):
-    # self: DiffusionPipeline, step: int, timestep: int, callback_kwargs: Dict
-    # logger.info(f"diffusion callback: step={step}, timestep={timestep}")
+    """在推理过程中回调，向前端实时汇报进度。"""
 
-    # We use asyncio loos for task processing. Perhaps in the future, we can add a processing queue similar to InvokeAI,
-    # but for now let's just start a separate event loop. It shouldn't make a difference for single person use
+    # 异步发送当前步骤给前端界面
     asyncio.run(global_sio.emit("diffusion_progress", {"step": step}))
     return {}
 
@@ -162,17 +179,23 @@ class Api:
     """
 
     def __init__(self, app: FastAPI, config: ApiConfig):
+        """初始化 API，对外注册各类路由并加载模型与插件。"""
+
         self.app = app
         self.config = config
+        # 自定义路由注册器及并发锁
         self.router = APIRouter()
         self.queue_lock = threading.Lock()
+        # 应用基础中间件和异常处理
         api_middleware(self.app)
 
+        # 初始化文件管理、插件和模型管理器
         self.file_manager = self._build_file_manager()
         self.plugins = self._build_plugins()
         self.model_manager = self._build_model_manager()
 
         # fmt: off
+        # 注册所有 REST 接口
         self.add_api_route("/api/v1/gen-info", self.api_geninfo, methods=["POST"], response_model=GenInfoResponse)
         self.add_api_route("/api/v1/server-config", self.api_server_config, methods=["GET"],
                            response_model=ServerConfigResponse)
@@ -190,43 +213,54 @@ class Api:
         # fmt: on
 
         global global_sio
+        # 初始化 Socket.IO 服务，用于实时通信
         self.sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
         self.combined_asgi_app = socketio.ASGIApp(self.sio, self.app)
         self.app.mount("/ws", self.combined_asgi_app)
         global_sio = self.sio
 
     def add_api_route(self, path: str, endpoint, **kwargs):
+        """包装 FastAPI 的路由注册方法，便于日后统一管理。"""
+
         return self.app.add_api_route(path, endpoint, **kwargs)
 
     def api_save_image(self, file: UploadFile):
-        # Sanitize filename to prevent path traversal
-        safe_filename = Path(file.filename).name  # Get just the filename component
+        """接收上传的图片并保存到输出目录。"""
 
-        # Construct the full path within output_dir
+        # 使用纯文件名避免目录穿越
+        safe_filename = Path(file.filename).name
+
+        # 构造输出路径
         output_path = self.config.output_dir / safe_filename
 
-        # Ensure output directory exists
+        # 检查输出目录是否可用
         if not self.config.output_dir or not self.config.output_dir.exists():
             raise HTTPException(
                 status_code=400,
                 detail="Output directory not configured or doesn't exist",
             )
 
-        # Read and write the file
+        # 将上传内容写入磁盘
         origin_image_bytes = file.file.read()
         with open(output_path, "wb") as fw:
             fw.write(origin_image_bytes)
 
     def api_current_model(self) -> ModelInfo:
+        """获取当前使用的模型信息。"""
+
         return self.model_manager.current_model
 
     def api_switch_model(self, req: SwitchModelRequest) -> ModelInfo:
+        """根据请求切换主模型。"""
+
         if req.name == self.model_manager.name:
             return self.model_manager.current_model
         self.model_manager.switch(req.name)
         return self.model_manager.current_model
 
     def api_switch_plugin_model(self, req: SwitchPluginModelRequest):
+        """切换指定插件所使用的模型。"""
+
         if req.plugin_name in self.plugins:
             self.plugins[req.plugin_name].switch_model(req.model_name)
             if req.plugin_name == RemoveBG.name:
@@ -238,6 +272,8 @@ class Api:
             torch_gc()
 
     def api_server_config(self) -> ServerConfigResponse:
+        """返回前端所需的服务器配置与插件信息。"""
+
         plugins = []
         for it in self.plugins.values():
             plugins.append(
@@ -248,6 +284,7 @@ class Api:
                 )
             )
 
+        # 整合当前服务与插件的配置信息返回给前端
         return ServerConfigResponse(
             plugins=plugins,
             modelInfos=self.model_manager.scan_models(),
@@ -267,6 +304,8 @@ class Api:
         )
 
     def api_input_image(self) -> FileResponse:
+        """返回预设的输入图片。"""
+
         if self.config.input is None:
             raise HTTPException(status_code=200, detail="No input image configured")
 
@@ -275,6 +314,8 @@ class Api:
         raise HTTPException(status_code=404, detail="Input image not found")
 
     def api_geninfo(self, file: UploadFile) -> GenInfoResponse:
+        """解析上传图片中保存的提示词信息。"""
+
         _, _, info = load_img(file.file.read(), return_info=True)
         parts = info.get("parameters", "").split("Negative prompt: ")
         prompt = parts[0].strip()
@@ -284,11 +325,14 @@ class Api:
         return GenInfoResponse(prompt=prompt, negative_prompt=negative_prompt)
 
     def api_inpaint(self, req: InpaintRequest):
+        """根据掩码对图像进行修复并返回结果。"""
+
         image, alpha_channel, infos, ext = decode_base64_to_image(req.image)
         mask, _, _, _ = decode_base64_to_image(req.mask, gray=True)
         logger.info(f"image ext: {ext}")
 
         mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)[1]
+        # 校验图片与掩码尺寸是否一致
         if image.shape[:2] != mask.shape[:2]:
             raise HTTPException(
                 400,
@@ -297,9 +341,11 @@ class Api:
 
         start = time.time()
         rgb_np_img = self.model_manager(image, mask, req)
+        # 打印推理耗时
         logger.info(f"process time: {(time.time() - start) * 1000:.2f}ms")
         torch_gc()
 
+        # 将模型输出转换为带透明通道的 RGBA
         rgb_np_img = cv2.cvtColor(rgb_np_img.astype(np.uint8), cv2.COLOR_BGR2RGB)
         rgb_res = concat_alpha_channel(rgb_np_img, alpha_channel)
 
@@ -310,6 +356,7 @@ class Api:
             infos=infos,
         )
 
+        # 通知前端任务结束
         asyncio.run(self.sio.emit("diffusion_finish"))
 
         return Response(
@@ -319,6 +366,8 @@ class Api:
         )
 
     def api_run_plugin_gen_image(self, req: RunPluginRequest):
+        """调用插件生成图像，返回处理后的结果。"""
+
         ext = "png"
         if req.name not in self.plugins:
             raise HTTPException(status_code=422, detail="Plugin not found")
@@ -347,6 +396,8 @@ class Api:
         )
 
     def api_run_plugin_gen_mask(self, req: RunPluginRequest):
+        """调用插件生成掩码。"""
+
         if req.name not in self.plugins:
             raise HTTPException(status_code=422, detail="Plugin not found")
         if not self.plugins[req.name].support_gen_mask:
@@ -363,14 +414,20 @@ class Api:
         )
 
     def api_samplers(self) -> List[str]:
+        """列出可用的采样器名称。"""
+
         return [member.value for member in SDSampler.__members__.values()]
 
     def api_adjust_mask(self, req: AdjustMaskRequest):
+        """在前端请求下对掩码做膨胀/腐蚀等形态学处理。"""
+
         mask, _, _, _ = decode_base64_to_image(req.mask, gray=True)
         mask = adjust_mask(mask, req.kernel_size, req.operate)
         return Response(content=numpy_to_bytes(mask, "png"), media_type="image/png")
 
     def launch(self):
+        """启动 Uvicorn 服务器。"""
+
         self.app.include_router(self.router)
         uvicorn.run(
             self.combined_asgi_app,
@@ -380,6 +437,8 @@ class Api:
         )
 
     def _build_file_manager(self) -> Optional[FileManager]:
+        """根据配置生成文件管理器，用于读取输入与保存输出。"""
+
         if self.config.input and self.config.input.is_dir():
             logger.info(
                 f"Input is directory, initialize file manager {self.config.input}"
@@ -394,6 +453,8 @@ class Api:
         return None
 
     def _build_plugins(self) -> Dict[str, BasePlugin]:
+        """构建所有已启用的插件实例。"""
+
         return build_plugins(
             self.config.enable_interactive_seg,
             self.config.interactive_seg_model,
@@ -413,6 +474,8 @@ class Api:
         )
 
     def _build_model_manager(self):
+        """初始化模型管理器。"""
+
         return ModelManager(
             name=self.config.model,
             device=torch.device(self.config.device),
