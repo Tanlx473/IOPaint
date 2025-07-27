@@ -314,9 +314,23 @@ class Api:
         raise HTTPException(status_code=404, detail="Input image not found")
 
     def api_geninfo(self, file: UploadFile) -> GenInfoResponse:
-        """解析上传图片中保存的提示词信息。"""
+        """
+            解析上传图片中保存的提示词信息。
+            逐行说明：api_geninfo 是 Api 类中的一个接口方法，对应路由 /api/v1/gen-info。
+                    参数 file: UploadFile 表示前端上传的图片文件。返回值类型为 GenInfoResponse（定义于 schema.py，含 prompt 和 negative_prompt 两个字段）。
+                    load_img(file.file.read(), return_info=True) 调用 load_img 读取上传的图片二进制数据。
+                    return_info=True 使函数同时返回图片的 info 字典（即 PIL.Image 读取到的元数据）。
+                    info.get("parameters", "") 在一些由 Stable Diffusion 等模型生成的 PNG 图像中，生成时的提示词会存放在元数据 parameters 字段中。若该字段不存在，默认使用空字符串。
+                    .split("Negative prompt: ") Stable Diffusion 将提示词和反向提示词（Negative Prompt）放在同一字段，通常格式为：prompt文字 Negative prompt: xxx\nSteps: ...。这里按 "Negative prompt: " 分割，得到包含前半部分（正向提示词）和后半部分（反向提示词及其后续参数信息）的列表。
+                    prompt = parts[0].strip()第一段即为正向提示词，去除前后空白。
+                    negative_prompt = "" 初始化反向提示词为空字符串。
+                    if len(parts) > 1:若分割后得到两段以上，说明元数据中确实包含 Negative prompt。
+                    negative_prompt = parts[1].split("\n")[0].strip() 取第二段的第一行文本作为反向提示词（因为之后往往还有 Steps、Seed 等其他参数）。最终也去除首尾空白。
+                    return GenInfoResponse(prompt=prompt, negative_prompt=negative_prompt) 构造并返回 GenInfoResponse，使前端能直接获取到相应的提示词内容。
+            该方法的作用是解析上传图片（通常是经过模型生成或编辑过的 PNG）所携带的元数据，从中提取出正向/反向提示词，供前端在重新编辑或复原图片参数时使用。
+        """
 
-        _, _, info = load_img(file.file.read(), return_info=True)
+        _, _, info = load_img(file.file.read(), return_info=True)  
         parts = info.get("parameters", "").split("Negative prompt: ")
         prompt = parts[0].strip()
         negative_prompt = ""
