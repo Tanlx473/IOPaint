@@ -1,3 +1,4 @@
+# 这个脚本用于合并多个 Diffusion 模型
 import glob
 import os
 from typing import Dict, List, Union
@@ -39,7 +40,9 @@ class CheckpointMergerPipeline(DiffusionPipeline):
     results = merged_pipe(prompt)
 
     ## For more details, see the docstring for the merge method.
+    ## 更多细节请参见 merge 方法的文档说明。
 
+    该类用于合并多个 diffusion 模型。
     """
 
     def __init__(self):
@@ -95,6 +98,7 @@ class CheckpointMergerPipeline(DiffusionPipeline):
 
         """
         # Default kwargs from DiffusionPipeline
+        # DiffusionPipeline 默认参数
         cache_dir = kwargs.pop("cache_dir", HF_HUB_CACHE)
         resume_download = kwargs.pop("resume_download", False)
         force_download = kwargs.pop("force_download", False)
@@ -113,9 +117,11 @@ class CheckpointMergerPipeline(DiffusionPipeline):
 
         checkpoint_count = len(pretrained_model_name_or_path_list)
         # Ignore result from model_index_json comparision of the two checkpoints
+        # 忽略 model_index.json 比对的结果
         force = kwargs.pop("force", False)
 
         # If less than 2 checkpoints, nothing to merge. If more than 3, not supported for now.
+        # 只能合并 2 或 3 个模型
         if checkpoint_count > 3 or checkpoint_count < 2:
             raise ValueError(
                 "Received incorrect number of checkpoints to merge. Ensure that either 2 or 3 checkpoints are being"
@@ -125,9 +131,12 @@ class CheckpointMergerPipeline(DiffusionPipeline):
         print("Received the right number of checkpoints")
         # chkpt0, chkpt1 = pretrained_model_name_or_path_list[0:2]
         # chkpt2 = pretrained_model_name_or_path_list[2] if checkpoint_count == 3 else None
+        # 示例编号，展示如何挖取
 
         # Validate that the checkpoints can be merged
+        # 确认检查点可以合并
         # Step 1: Load the model config and compare the checkpoints. We'll compare the model_index.json first while ignoring the keys starting with '_'
+        # 第一步：加载配置并比对 model_index.json
         config_dicts = []
         for pretrained_model_name_or_path in pretrained_model_name_or_path_list:
             config_dict = DiffusionPipeline.load_config(
@@ -154,6 +163,7 @@ class CheckpointMergerPipeline(DiffusionPipeline):
                 print(config_dicts[0], config_dicts[1])
         print("Compatible model_index.json files found")
         # Step 2: Basic Validation has succeeded. Let's download the models and save them into our local files.
+        # 第二步：下载模型至本地
         cached_folders = []
         for pretrained_model_name_or_path, config_dict in zip(
             pretrained_model_name_or_path_list, config_dicts
@@ -192,7 +202,7 @@ class CheckpointMergerPipeline(DiffusionPipeline):
             cached_folders.append(cached_folder)
 
         # Step 3:-
-        # Load the first checkpoint as a diffusion pipeline and modify its module state_dict in place
+        # 第三步：加载第一个 checkpoint 并修改 state_dict
         final_pipe = DiffusionPipeline.from_pretrained(
             cached_folders[0], torch_dtype=torch_dtype, device_map=device_map
         )
@@ -212,6 +222,7 @@ class CheckpointMergerPipeline(DiffusionPipeline):
             theta_func = CheckpointMergerPipeline.weighted_sum
 
         # Find each module's state dict.
+        # 找到每个模块的 state dict
         for attr in final_pipe.config.keys():
             if not attr.startswith("_"):
                 checkpoint_path_1 = os.path.join(cached_folders[1], attr)
@@ -240,7 +251,9 @@ class CheckpointMergerPipeline(DiffusionPipeline):
                         )
                         checkpoint_path_2 = files[0] if len(files) > 0 else None
                 # For an attr if both checkpoint_path_1 and 2 are None, ignore.
+                # 如果 checkpoint 都不存在，则继续
                 # If atleast one is present, deal with it according to interp method, of course only if the state_dict keys match.
+                # 至少有一个存在时才使用指定的接合方法
                 if checkpoint_path_1 is None and checkpoint_path_2 is None:
                     print(f"Skipping {attr}: not present in 2nd or 3d model")
                     continue
@@ -250,6 +263,7 @@ class CheckpointMergerPipeline(DiffusionPipeline):
                     if isinstance(
                         module, bool
                     ):  # ignore requires_safety_checker boolean
+                        # 忽略 requires_safety_checker 字段
                         continue
                     theta_0 = getattr(module, "state_dict")
                     theta_0 = theta_0()
@@ -315,12 +329,14 @@ class CheckpointMergerPipeline(DiffusionPipeline):
         return ((1 - alpha) * theta0) + (alpha * theta1)
 
     # Smoothstep (https://en.wikipedia.org/wiki/Smoothstep)
+    # 平滑接合函数
     @staticmethod
     def sigmoid(theta0, theta1, theta2, alpha):
         alpha = alpha * alpha * (3 - (2 * alpha))
         return theta0 + ((theta1 - theta0) * alpha)
 
     # Inverse Smoothstep (https://en.wikipedia.org/wiki/Smoothstep)
+    # 反平滑接合函数
     @staticmethod
     def inv_sigmoid(theta0, theta1, theta2, alpha):
         import math
@@ -331,9 +347,11 @@ class CheckpointMergerPipeline(DiffusionPipeline):
     @staticmethod
     def add_difference(theta0, theta1, theta2, alpha):
         # theta0 + (theta1 - theta2) * (1.0 - alpha)
+        # 混合函数，将差值加入
 
         diff = (theta1 - theta2) * (1.0 - alpha)
         # print(f"theta0.shape: {theta0.shape}, diff shape: {diff.shape}")
+        # 输出差值的形状
         # theta_0[key][:, 0:4, :, :] = theta_func2(a[:, 0:4, :, :], b, multiplier)
         if theta0.shape != diff.shape:
             theta0[:, 0:4, :, :] = theta0[:, 0:4, :, :] + diff
@@ -347,6 +365,7 @@ merged_pipe = pipe.merge(
     [
         "runwayml/stable-diffusion-inpainting",
         # "SG161222/Realistic_Vision_V1.4",
+        # 可以在此处增加其他模型
         "dreamlike-art/dreamlike-diffusion-1.0",
         "runwayml/stable-diffusion-v1-5",
     ],
