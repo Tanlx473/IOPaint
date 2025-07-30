@@ -3,6 +3,9 @@
 Shared data structures and enums for the API and models.
 """
 
+# 本文件统一定义了 API 与模型层需要共享的数据模型，
+# 通过这些类可以方便地进行参数校验及序列化。
+
 
 import random
 from enum import Enum
@@ -10,6 +13,8 @@ from pathlib import Path
 from typing import Optional, Literal, List
 
 from loguru import logger
+
+# 常量定义在 iopaint.const 中，主要用于判定模型类型及其特性
 
 from iopaint.const import (
     INSTRUCT_PIX2PIX_NAME,
@@ -24,21 +29,27 @@ from iopaint.const import (
 )
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+# 所有数据模型都继承自 BaseModel，利用其类型检查功能
+
 
 class ModelType(str, Enum):
-    INPAINT = "inpaint"  # LaMa, MAT...
-    DIFFUSERS_SD = "diffusers_sd"
-    DIFFUSERS_SD_INPAINT = "diffusers_sd_inpaint"
-    DIFFUSERS_SDXL = "diffusers_sdxl"
-    DIFFUSERS_SDXL_INPAINT = "diffusers_sdxl_inpaint"
-    DIFFUSERS_OTHER = "diffusers_other"
+    """模型的类型枚举，用于区分不同推理框架或算法"""
+
+    INPAINT = "inpaint"  # 传统 LaMa、MAT 等模型
+    DIFFUSERS_SD = "diffusers_sd"  # stable diffusion 文生图模型
+    DIFFUSERS_SD_INPAINT = "diffusers_sd_inpaint"  # Stable Diffusion 修复模型
+    DIFFUSERS_SDXL = "diffusers_sdxl"  # SDXL 模型
+    DIFFUSERS_SDXL_INPAINT = "diffusers_sdxl_inpaint"  # SDXL 修复模型
+    DIFFUSERS_OTHER = "diffusers_other"  # 其他 diffusers 模型
 
 
 class ModelInfo(BaseModel):
-    name: str
-    path: str
-    model_type: ModelType
-    is_single_file_diffusers: bool = False
+    """描述模型文件及其特性的配置类"""
+
+    name: str  # 模型在列表中的显示名称
+    path: str  # 模型文件路径
+    model_type: ModelType  # 决定加载与推理方式
+    is_single_file_diffusers: bool = False  # diffusers 是否为单文件结构
 
     @computed_field
     @property
@@ -142,18 +153,22 @@ class ModelInfo(BaseModel):
 
 
 class Choices(str, Enum):
+    """基础枚举类，提供获取所有值的便捷方法"""
+
     @classmethod
     def values(cls):
         return [member.value for member in cls]
 
 
 class RealESRGANModel(Choices):
+    """RealESRGAN 超分辨模型枚举"""
     realesr_general_x4v3 = "realesr-general-x4v3"
     RealESRGAN_x4plus = "RealESRGAN_x4plus"
     RealESRGAN_x4plus_anime_6B = "RealESRGAN_x4plus_anime_6B"
 
 
 class RemoveBGModel(Choices):
+    """背景移除模型的名称枚举"""
     briaai_rmbg_1_4 = "briaai/RMBG-1.4"
     briaai_rmbg_2_0 = "briaai/RMBG-2.0"
     # models from https://github.com/danielgatis/rembg
@@ -173,12 +188,14 @@ class RemoveBGModel(Choices):
 
 
 class Device(Choices):
+    """运行设备枚举，控制模型加载到 CPU、CUDA 或 MPS"""
     cpu = "cpu"
     cuda = "cuda"
     mps = "mps"
 
 
 class InteractiveSegModel(Choices):
+    """交互式分割模型枚举"""
     vit_b = "vit_b"
     vit_l = "vit_l"
     vit_h = "vit_h"
@@ -199,17 +216,21 @@ class InteractiveSegModel(Choices):
 
 
 class PluginInfo(BaseModel):
+    """记录插件信息及其支持的能力"""
+
     name: str
     support_gen_image: bool = False
     support_gen_mask: bool = False
 
 
 class CV2Flag(str, Enum):
+    """OpenCV 自带的图像修复算法标识"""
     INPAINT_NS = "INPAINT_NS"
     INPAINT_TELEA = "INPAINT_TELEA"
 
 
 class HDStrategy(str, Enum):
+    """高分辨率处理策略"""
     # Use original image size
     ORIGINAL = "Original"
     # Resize the longer side of the image to a specific size(hd_strategy_resize_limit),
@@ -221,11 +242,13 @@ class HDStrategy(str, Enum):
 
 
 class LDMSampler(str, Enum):
+    """旧版 LDM 模型的采样器枚举"""
     ddim = "ddim"
     plms = "plms"
 
 
 class SDSampler(str, Enum):
+    """Stable Diffusion 相关采样器枚举"""
     dpm_plus_plus_2m = "DPM++ 2M"
     dpm_plus_plus_2m_karras = "DPM++ 2M Karras"
     dpm_plus_plus_2m_sde = "DPM++ 2M SDE"
@@ -249,6 +272,7 @@ class SDSampler(str, Enum):
 
 
 class PowerPaintTask(Choices):
+    """PowerPaint 功能所支持的任务类型"""
     text_guided = "text-guided"
     context_aware = "context-aware"
     shape_guided = "shape-guided"
@@ -257,6 +281,8 @@ class PowerPaintTask(Choices):
 
 
 class ApiConfig(BaseModel):
+    """启动 API 服务器时的参数配置"""
+
     host: str
     port: int
     inbrowser: bool
@@ -289,6 +315,7 @@ class ApiConfig(BaseModel):
 
 
 class InpaintRequest(BaseModel):
+    """前端发起的修复任务请求体"""
     image: Optional[str] = Field(None, description="base64 encoded image")
     mask: Optional[str] = Field(None, description="base64 encoded mask")
 
@@ -426,6 +453,7 @@ class InpaintRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_field(cls, values: "InpaintRequest"):
+        """根据用户选项自动调整冲突或随机参数"""
         if values.sd_seed == -1:
             values.sd_seed = random.randint(1, 99999999)
             logger.info(f"Generate random seed: {values.sd_seed}")
@@ -455,6 +483,7 @@ class InpaintRequest(BaseModel):
 
 
 class RunPluginRequest(BaseModel):
+    """运行插件时提交的参数"""
     name: str
     image: str = Field(..., description="base64 encoded image")
     clicks: List[List[int]] = Field(
@@ -467,6 +496,7 @@ MediaTab = Literal["input", "output", "mask"]
 
 
 class MediasResponse(BaseModel):
+    """前端获取媒体文件列表时使用的返回结构"""
     name: str
     height: int
     width: int
@@ -475,11 +505,13 @@ class MediasResponse(BaseModel):
 
 
 class GenInfoResponse(BaseModel):
+    """生成图片时的提示词信息"""
     prompt: str = ""
     negative_prompt: str = ""
 
 
 class ServerConfigResponse(BaseModel):
+    """服务器端配置项，供前端初始化时读取"""
     plugins: List[PluginInfo]
     modelInfos: List[ModelInfo]
     removeBGModel: RemoveBGModel
@@ -498,10 +530,12 @@ class ServerConfigResponse(BaseModel):
 
 
 class SwitchModelRequest(BaseModel):
+    """切换主模型的请求"""
     name: str
 
 
 class SwitchPluginModelRequest(BaseModel):
+    """切换插件所使用模型的请求"""
     plugin_name: str
     model_name: str
 
@@ -510,6 +544,7 @@ AdjustMaskOperate = Literal["expand", "shrink", "reverse"]
 
 
 class AdjustMaskRequest(BaseModel):
+    """调整遮罩形状的请求"""
     mask: str = Field(
         ..., description="base64 encoded mask. 255 means area to do inpaint"
     )
